@@ -8,6 +8,8 @@ import {CatchAsyncError} from "../middleware/catchAsyncErrors";
 import jwt, {Secret} from "jsonwebtoken"
 import ejs from "ejs"
 import sendMail from "../utils/sendMail";
+import {sendToken} from "../utils/jwt";
+import {redis} from "../utils/redis";
 
 // Register User
 interface IRegistration {
@@ -64,7 +66,7 @@ export const registrationUser = CatchAsyncError(async (req: Request, res: Respon
             return next(new ErrorHandler(error.message, 400));
         }
 
-    } catch(error: any) {
+    } catch (error: any) {
         return next(new ErrorHandler(error.message, 400));
     }
 });
@@ -92,10 +94,10 @@ export const activateUser = CatchAsyncError(async (req: Request, res: Response, 
     try {
         const {activation_token, activation_code} = req.body as IActivationRequest;
 
-        const newUser : {user: IUser; activationCode:string} = jwt.verify(
+        const newUser: { user: IUser; activationCode: string } = jwt.verify(
             activation_token,
             process.env.ACTIVATION_SECRET as string
-        ) as {user: IUser, activationCode: string};
+        ) as { user: IUser, activationCode: string };
 
         if (newUser.activationCode !== activation_code) {
             return next(new ErrorHandler('Invalid activation code', 400));
@@ -132,6 +134,41 @@ interface ILoginRequest {
 export const loginUser = CatchAsyncError(async (req: Request, res: Response, next: NextFunction) => {
     try {
         const {email, password} = req.body as ILoginRequest;
+
+        if (!email || !password) {
+            return next(new ErrorHandler('Please enter email and password', 400));
+        }
+
+        const user = await userModel.findOne({email}).select('+password');
+
+        if (!user) {
+            return next(new ErrorHandler('Invalid email or password', 400));
+        }
+        // checking if the password is correct
+        const isPasswordMatched = await user.comparePassword(password);
+        if (!isPasswordMatched) {
+            return next(new ErrorHandler('Invalid email or password', 400));
+        }
+
+        sendToken(user, 200, res);
+    } catch (error: any) {
+        return next(new ErrorHandler(error.message, 400));
+    }
+})
+
+// Logout User
+export const logoutUser = CatchAsyncError(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        res.cookie("access_token", "", {maxAge: 1});
+        res.cookie("refresh_token", "", {maxAge: 1});
+
+        const userId = req.user?._id || '';
+        redis.del(userId);
+
+        res.status(200).json({
+            success: true,
+            message: "Logged out successfully",
+        });
     } catch (error: any) {
         return next(new ErrorHandler(error.message, 400));
     }
